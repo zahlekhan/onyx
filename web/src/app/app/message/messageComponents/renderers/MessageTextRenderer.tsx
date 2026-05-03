@@ -30,6 +30,15 @@ import { extractChatImageFileId } from "@/app/app/components/files/images/utils"
 import { transformLinkUri } from "@/lib/utils";
 import { cn } from "@opal/utils";
 import { useSmoothStreaming } from "@/hooks/useSmoothStreaming";
+import dynamic from "next/dynamic";
+
+const OpenUIRenderer = dynamic(
+  () =>
+    import(
+      "@/app/app/message/messageComponents/renderers/openui/OpenUIRenderer"
+    ),
+  { ssr: false }
+);
 
 /** Maps a visible-char count to a markdown index (skips formatting chars,
  *  extends to word boundary). Used by the voice-sync reveal path only. */
@@ -277,6 +286,18 @@ export const MessageTextRenderer: MessageRenderer<
     }
   }, [streamFullyDisplayed, onComplete]);
 
+  const isOpenUIDSL = useMemo(() => {
+    const trimmed = displayedContent.trim();
+    const match = /^root\s*=\s*[A-Z]\w*\s*\(/.test(trimmed);
+    console.log("[OpenUI] detection check:", {
+      match,
+      contentLength: displayedContent.length,
+      first100: displayedContent.slice(0, 100),
+      trimmedFirst100: trimmed.slice(0, 100),
+    });
+    return match;
+  }, [displayedContent]);
+
   const processedContent = useMemo(
     () => processContent(displayedContent),
     [displayedContent]
@@ -290,6 +311,8 @@ export const MessageTextRenderer: MessageRenderer<
   stateRef.current = state;
   const processedContentRef = useRef(processedContent);
   processedContentRef.current = processedContent;
+  const stopPacketSeenRef = useRef(stopPacketSeen);
+  stopPacketSeenRef.current = stopPacketSeen;
 
   const markdownComponents = useMemo<Components>(
     () => ({
@@ -354,6 +377,22 @@ export const MessageTextRenderer: MessageRenderer<
           processedContentRef.current,
           children
         );
+
+        const isOpenUI = className
+          ?.split(" ")
+          .some(
+            (cls) => cls === "language-openui" || cls === "language-openui-lang"
+          );
+
+        if (isOpenUI) {
+          return (
+            <OpenUIRenderer
+              content={codeText}
+              isStreaming={!stopPacketSeenRef.current}
+            />
+          );
+        }
+
         return (
           <CodeBlock className={className} codeText={codeText}>
             {children}
@@ -390,6 +429,19 @@ export const MessageTextRenderer: MessageRenderer<
     ? processedContent + " [*]() "
     : processedContent;
 
+  console.log("[OpenUI] Render branch:", {
+    shouldShowThinkingPlaceholder,
+    shouldShowSpeechWarmupIndicator,
+    displayedContentLength: displayedContent.length,
+    isOpenUIDSL,
+    stopPacketSeen,
+    branch: shouldShowThinkingPlaceholder || shouldShowSpeechWarmupIndicator
+      ? "thinking"
+      : displayedContent.length > 0
+        ? isOpenUIDSL ? "openui" : "markdown"
+        : "blinking",
+  });
+
   return children([
     {
       icon: null,
@@ -400,28 +452,35 @@ export const MessageTextRenderer: MessageRenderer<
             Thinking
           </Text>
         ) : displayedContent.length > 0 ? (
-          <div
-            dir="auto"
-            className={cn(!streamFullyDisplayed && "streaming-katex")}
-          >
-            <ReactMarkdown
-              className="prose prose-onyx font-main-content-body max-w-full"
-              components={markdownComponents}
-              remarkPlugins={
-                streamFullyDisplayed
-                  ? FULL_REMARK_PLUGINS
-                  : STREAMING_REMARK_PLUGINS
-              }
-              rehypePlugins={
-                streamFullyDisplayed
-                  ? FULL_REHYPE_PLUGINS
-                  : STREAMING_REHYPE_PLUGINS
-              }
-              urlTransform={transformLinkUri}
+          isOpenUIDSL ? (
+            <OpenUIRenderer
+              content={displayedContent}
+              isStreaming={!stopPacketSeen}
+            />
+          ) : (
+            <div
+              dir="auto"
+              className={cn(!streamFullyDisplayed && "streaming-katex")}
             >
-              {markdownInput}
-            </ReactMarkdown>
-          </div>
+              <ReactMarkdown
+                className="prose prose-onyx font-main-content-body max-w-full"
+                components={markdownComponents}
+                remarkPlugins={
+                  streamFullyDisplayed
+                    ? FULL_REMARK_PLUGINS
+                    : STREAMING_REMARK_PLUGINS
+                }
+                rehypePlugins={
+                  streamFullyDisplayed
+                    ? FULL_REHYPE_PLUGINS
+                    : STREAMING_REHYPE_PLUGINS
+                }
+                urlTransform={transformLinkUri}
+              >
+                {markdownInput}
+              </ReactMarkdown>
+            </div>
+          )
         ) : (
           <BlinkingBar addMargin />
         ),
